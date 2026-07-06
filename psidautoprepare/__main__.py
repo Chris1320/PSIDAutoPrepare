@@ -1,9 +1,11 @@
 import argparse
+import math
 import sys
 import urllib.request
 from pathlib import Path
 
 import cv2
+import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
@@ -43,6 +45,45 @@ def get_face_detector(
     return detector
 
 
+def normalize_target_brightness(
+    cv2_image: cv2.typing.MatLike, target_percentage: int
+) -> cv2.typing.MatLike:
+    """
+    Uses Gamma Correction to non-linearly adjust the midtones of the image
+    so the overall average brightness matches the target percentage.
+    This mimics the 'Midtone' slider in Photoshop's Levels adjustment.
+    """
+    # 1. Convert to LAB color space to isolate pure Lightness (L) from Color (A/B)
+    lab = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+
+    # 2. Calculate current average lightness (0 to 255)
+    current_mean = cv2.mean(l_channel)[0]
+
+    # Safety check: if image is entirely pitch black or blindingly white, skip math
+    if current_mean <= 1 or current_mean >= 254:
+        return cv2_image
+
+    # 3. Calculate target mean (0 to 255)
+    target_mean = (target_percentage / 100.0) * 255.0
+
+    # 4. Calculate the specific Gamma curve needed to bend the current mean to the target mean
+    # Formula: target = current ^ gamma  =>  gamma = log(target) / log(current) (scaled 0-1)
+    gamma = math.log(target_mean / 255.0) / math.log(current_mean / 255.0)
+
+    # 5. Build a Look-Up Table (LUT) for blazing-fast mapping
+    lut = np.array([((i / 255.0) ** gamma) * 255 for i in np.arange(0, 256)]).astype(
+        "uint8"
+    )
+
+    # 6. Apply the non-linear curve strictly to the Lightness channel
+    l_adjusted = cv2.LUT(l_channel, lut)
+
+    # 7. Merge the adjusted lightness back with the original colors
+    lab_adjusted = cv2.merge((l_adjusted, a_channel, b_channel))
+    return cv2.cvtColor(lab_adjusted, cv2.COLOR_LAB2BGR)
+
+
 def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
     """Converts OpenCV image to Pillow and saves with strict 300 DPI metadata."""
     rgb_img = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
@@ -66,6 +107,7 @@ def main(
     size: int,
     padding_ratio: float,
     exclude: str | None,
+    normalize: int | None,
 ) -> int:
     input_path = Path(target_dir)
     target_size = (size, size)
@@ -80,6 +122,12 @@ def main(
     output_path.mkdir(exist_ok=True)
     print(f"Output directory set to: {output_path}")
     print(f"Target Resolution: {size}x{size}px | Padding Ratio: {padding_ratio}x")
+
+    if normalize is not None:
+        normalize = max(1, min(99, normalize))  # Clamp between 1% and 99%
+        print(
+            f"[*] Normalization ENABLED: All images will be Gamma-corrected to {normalize}% brightness."
+        )
 
     detector = get_face_detector(input_size=target_size)
 
@@ -144,6 +192,10 @@ def main(
                 cropped_img, target_size, interpolation=cv2.INTER_LANCZOS4
             )
 
+            # --- Target Brightness Normalization ---
+            if normalize is not None:
+                final_img = normalize_target_brightness(final_img, normalize)
+
             # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
             tqdm.write(f"[+] Successfully cropped: {img_file.name}")
@@ -162,6 +214,10 @@ def main(
             final_img = cv2.resize(
                 fallback_img, target_size, interpolation=cv2.INTER_LANCZOS4
             )
+
+            # --- Target Brightness Normalization ---
+            if normalize is not None:
+                final_img = normalize_target_brightness(final_img, normalize)
 
             # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
@@ -214,6 +270,12 @@ if __name__ == "__main__":
         help="Skip processing any filenames containing this specific substring pattern.",
     )
     parser.add_argument(
+        "--normalize",
+        type=int,
+        default=None,
+        help="Target average brightness percentage (1-99). Uses Gamma correction (Levels adjustment).",
+    )
+    parser.add_argument(
         "--err-output",
         type=str,
         default="no_face_detected.txt",
@@ -229,5 +291,6 @@ if __name__ == "__main__":
             args.size,
             args.padding,
             args.exclude,
+            args.normalize,
         )
     )
