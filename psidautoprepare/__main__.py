@@ -53,35 +53,28 @@ def normalize_target_brightness(
     so the overall average brightness matches the target percentage.
     This mimics the 'Midtone' slider in Photoshop's Levels adjustment.
     """
-    # 1. Convert to LAB color space to isolate pure Lightness (L) from Color (A/B)
-    lab = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab)
-
-    # 2. Calculate current average lightness (0 to 255)
-    current_mean = cv2.mean(l_channel)[0]
+    # 1. Calculate current average brightness using standard grayscale
+    gray = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2GRAY)
+    current_mean = cv2.mean(gray)[0]
 
     # Safety check: if image is entirely pitch black or blindingly white, skip math
     if current_mean <= 1 or current_mean >= 254:
         return cv2_image
 
-    # 3. Calculate target mean (0 to 255)
+    # 2. Calculate target mean (0 to 255)
     target_mean = (target_percentage / 100.0) * 255.0
 
-    # 4. Calculate the specific Gamma curve needed to bend the current mean to the target mean
+    # 3. Calculate the specific Gamma curve needed to bend the current mean to the target mean
     # Formula: target = current ^ gamma  =>  gamma = log(target) / log(current) (scaled 0-1)
     gamma = math.log(target_mean / 255.0) / math.log(current_mean / 255.0)
 
-    # 5. Build a Look-Up Table (LUT) for blazing-fast mapping
+    # 4. Build a Look-Up Table (LUT) for blazing-fast mapping
     lut = np.array([((i / 255.0) ** gamma) * 255 for i in np.arange(0, 256)]).astype(
         "uint8"
     )
 
-    # 6. Apply the non-linear curve strictly to the Lightness channel
-    l_adjusted = cv2.LUT(l_channel, lut)
-
-    # 7. Merge the adjusted lightness back with the original colors
-    lab_adjusted = cv2.merge((l_adjusted, a_channel, b_channel))
-    return cv2.cvtColor(lab_adjusted, cv2.COLOR_LAB2BGR)
+    # 5. Apply the non-linear curve directly to the BGR channels (exactly how Photoshop Levels works)
+    return cv2.LUT(cv2_image, lut)
 
 
 def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
