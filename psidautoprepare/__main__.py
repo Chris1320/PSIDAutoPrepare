@@ -46,7 +46,14 @@ def save_with_dpi(cv2_image, output_path):
     pil_img = Image.fromarray(rgb_img)
 
     # Save the file with the DPI embedded in the EXIF/header data
-    pil_img.save(str(output_path), dpi=TARGET_SIZE)
+    pil_img.save(
+        str(output_path),
+        format="JPEG",
+        quality=100,
+        dpi=TARGET_SIZE,
+        subsampling=0,
+        progressive=True,
+    )
 
 
 def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
