@@ -65,6 +65,7 @@ def main(
     err_output: str,
     size: int,
     padding_ratio: float,
+    exclude: str | None,
 ) -> int:
     input_path = Path(target_dir)
     target_size = (size, size)
@@ -87,6 +88,16 @@ def main(
         for f in input_path.iterdir()
         if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
     ]
+
+    # Filter out files containing the exclusion pattern if provided
+    if exclude:
+        initial_count = len(files)
+        files = [f for f in files if exclude not in f.name]
+        excluded_count = initial_count - len(files)
+        if excluded_count > 0:
+            print(
+                f"[*] Excluded {excluded_count} file(s) matching pattern: '{exclude}'"
+            )
 
     if not files:
         print(f"No valid images found in {input_path}")
@@ -197,6 +208,12 @@ if __name__ == "__main__":
         help="Fraction of the face height to use as padding (e.g., 0.6 = 60%%). Default: 0.6",
     )
     parser.add_argument(
+        "--exclude",
+        type=str,
+        default=None,
+        help="Skip processing any filenames containing this specific substring pattern.",
+    )
+    parser.add_argument(
         "--err-output",
         type=str,
         default="no_face_detected.txt",
@@ -205,5 +222,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     sys.exit(
-        main(args.target_dir, args.output_dir, args.err_output, args.size, args.padding)
+        main(
+            args.target_dir,
+            args.output_dir,
+            args.err_output,
+            args.size,
+            args.padding,
+            args.exclude,
+        )
     )
