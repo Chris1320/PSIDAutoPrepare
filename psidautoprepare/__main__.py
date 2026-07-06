@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 from PIL import Image
+from tqdm import tqdm
 
 TARGET_SIZE = (600, 600)
 
@@ -85,12 +86,12 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
     print(f"Found {len(files)} images to process.\n---")
     failed_detections = []
 
-    for img_file in files:
+    for img_file in tqdm(files, desc="Processing images"):
         out_file = output_path / img_file.name
 
         img = cv2.imread(str(img_file))
         if img is None:
-            print(f"[-] Could not read {img_file.name}. Skipping.")
+            tqdm.write(f"[-] Could not read {img_file.name}. Skipping.")
             continue
 
         height, width, _ = img.shape
@@ -124,10 +125,10 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
             # Use our new Pillow save function
             save_with_dpi(final_img, out_file)
-            print(f"[+] Successfully cropped: {img_file.name}")
+            tqdm.write(f"[+] Successfully cropped: {img_file.name}")
 
         else:
-            print(
+            tqdm.write(
                 f"[!] No face detected in {img_file.name}. Applying a center crop fallback."
             )
             failed_detections.append(img_file.name)

@@ -8,4 +8,5 @@ dependencies = [
     "numpy>=2.5.1",
     "opencv-python>=5.0.0.93",
     "pillow>=12.3.0",
+    "tqdm>=4.68.3",
 ]
