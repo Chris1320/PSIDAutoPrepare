@@ -11,10 +11,13 @@ from psidautoprepare.info import (
     DEFAULT_MODEL_FILEPATH,
     DEFAULT_MODEL_URL,
     DEFAULT_TARGET_SIZE,
+    IMAGE_EXTENSIONS,
 )
 
 
-def get_face_detector() -> cv2.FaceDetectorYN:
+def get_face_detector(
+    input_size: tuple[int, int] = DEFAULT_TARGET_SIZE,
+) -> cv2.FaceDetectorYN:
     """
     Downloads the YuNet model if missing and initializes the detector.
 
@@ -32,7 +35,7 @@ def get_face_detector() -> cv2.FaceDetectorYN:
     detector = cv2.FaceDetectorYN.create(
         model=str(model_path),
         config="",
-        input_size=DEFAULT_TARGET_SIZE,
+        input_size=input_size,
         score_threshold=0.6,
         nms_threshold=0.3,
         top_k=5000,
@@ -41,24 +44,30 @@ def get_face_detector() -> cv2.FaceDetectorYN:
 
 
 def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
-    """Converts OpenCV image to Pillow and saves with strict DPI metadata."""
-    # OpenCV uses BGR, but Pillow expects RGB. We must convert the color space first.
+    """Converts OpenCV image to Pillow and saves with strict 300 DPI metadata."""
     rgb_img = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb_img)
 
-    # Save the file with the DPI embedded in the EXIF/header data
+    # Hardcode standard photo-print DPI (300x300) independent of pixel resolution
     pil_img.save(
         str(output_path),
         format="JPEG",
         quality=100,
-        dpi=DEFAULT_TARGET_SIZE,
+        dpi=(300, 300),
         subsampling=0,
         progressive=True,
     )
 
 
-def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
+def main(
+    target_dir: str,
+    output_dir: str | None,
+    err_output: str,
+    size: int,
+    padding_ratio: float,
+) -> int:
     input_path = Path(target_dir)
+    target_size = (size, size)
 
     if not input_path.is_dir():
         print(f"Error: Directory '{target_dir}' does not exist or is not a directory.")
@@ -69,14 +78,14 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
     )
     output_path.mkdir(exist_ok=True)
     print(f"Output directory set to: {output_path}")
+    print(f"Target Resolution: {size}x{size}px | Padding Ratio: {padding_ratio}x")
 
-    detector = get_face_detector()
+    detector = get_face_detector(input_size=target_size)
 
-    valid_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     files = [
         f
         for f in input_path.iterdir()
-        if f.is_file() and f.suffix.lower() in valid_extensions
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
     ]
 
     if not files:
@@ -100,8 +109,9 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
         if faces is not None and len(faces) > 0:  # type: ignore
             fx, fy, fw, fh = map(int, faces[0][:4])
-            padding = int(fh * 0.6)
+            padding = int(fh * padding_ratio)
 
+            # Use the user-defined pixel padding instead of proportional (fh * 0.6)
             crop_x1 = max(0, fx - padding)
             crop_y1 = max(0, fy - padding)
             crop_x2 = min(width, fx + fw + padding)
@@ -120,10 +130,10 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
             # Interpolation set to LANCZOS4 which is better for upscaling if needed
             final_img = cv2.resize(
-                cropped_img, DEFAULT_TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
+                cropped_img, target_size, interpolation=cv2.INTER_LANCZOS4
             )
 
-            # Use our new Pillow save function
+            # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
             tqdm.write(f"[+] Successfully cropped: {img_file.name}")
 
@@ -139,10 +149,10 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
             fallback_img = img[cy1 : cy1 + min_dim, cx1 : cx1 + min_dim]
             final_img = cv2.resize(
-                fallback_img, DEFAULT_TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
+                fallback_img, target_size, interpolation=cv2.INTER_LANCZOS4
             )
 
-            # Use our new Pillow save function
+            # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
 
     print("\nProcessing complete!")
@@ -161,7 +171,7 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Crop student pictures into 2x2 IDs with strict DPI metadata."
+        description="Crop student pictures into 1:1 IDs with strict DPI metadata."
     )
     parser.add_argument(
         "target_dir",
@@ -175,6 +185,18 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--size",
+        type=int,
+        default=DEFAULT_TARGET_SIZE[0],
+        help=f"Target output size in pixels (creates a square image). Default: {DEFAULT_TARGET_SIZE[0]}",
+    )
+    parser.add_argument(
+        "--padding",
+        type=float,
+        default=0.6,
+        help="Fraction of the face height to use as padding (e.g., 0.6 = 60%%). Default: 0.6",
+    )
+    parser.add_argument(
         "--err-output",
         type=str,
         default="no_face_detected.txt",
@@ -182,4 +204,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    sys.exit(main(args.target_dir, args.output_dir, args.err_output))
+    sys.exit(
+        main(args.target_dir, args.output_dir, args.err_output, args.size, args.padding)
+    )
