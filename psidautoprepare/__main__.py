@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -8,31 +7,32 @@ import cv2
 from PIL import Image
 from tqdm import tqdm
 
-TARGET_SIZE = (600, 600)
+from psidautoprepare.info import (
+    DEFAULT_MODEL_FILEPATH,
+    DEFAULT_MODEL_URL,
+    DEFAULT_TARGET_SIZE,
+)
 
-DEFAULT_MODEL_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2026may.onnx"
-DEFAULT_MODEL_FILENAME = "face_detection_yunet_2026may.onnx"
-DEFAULT_MODEL_FILEPATH = Path(os.getcwd()) / "models" / DEFAULT_MODEL_FILENAME
 
+def get_face_detector() -> cv2.FaceDetectorYN:
+    """
+    Downloads the YuNet model if missing and initializes the detector.
 
-def get_face_detector():
-    """Downloads the YuNet model if missing and initializes the detector."""
+    Returns:
+        An initialized face detector.
+    """
 
     model_path = DEFAULT_MODEL_FILEPATH
 
     if not model_path.exists():
         print(f"[*] Downloading YuNet model to {model_path}...")
-        try:
-            urllib.request.urlretrieve(DEFAULT_MODEL_URL, model_path)
-            print("[*] Download complete.")
-        except Exception as e:
-            print(f"Error downloading model: {e}")
-            sys.exit(1)
+        urllib.request.urlretrieve(DEFAULT_MODEL_URL, model_path)
+        print("[*] Download complete.")
 
     detector = cv2.FaceDetectorYN.create(
         model=str(model_path),
         config="",
-        input_size=(320, 320),
+        input_size=DEFAULT_TARGET_SIZE,
         score_threshold=0.6,
         nms_threshold=0.3,
         top_k=5000,
@@ -40,7 +40,7 @@ def get_face_detector():
     return detector
 
 
-def save_with_dpi(cv2_image, output_path):
+def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
     """Converts OpenCV image to Pillow and saves with strict DPI metadata."""
     # OpenCV uses BGR, but Pillow expects RGB. We must convert the color space first.
     rgb_img = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
@@ -51,7 +51,7 @@ def save_with_dpi(cv2_image, output_path):
         str(output_path),
         format="JPEG",
         quality=100,
-        dpi=TARGET_SIZE,
+        dpi=DEFAULT_TARGET_SIZE,
         subsampling=0,
         progressive=True,
     )
@@ -84,7 +84,7 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
         return 0
 
     print(f"Found {len(files)} images to process.\n---")
-    failed_detections = []
+    failed_detections: list[str] = []
 
     for img_file in tqdm(files, desc="Processing images"):
         out_file = output_path / img_file.name
@@ -98,7 +98,7 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
         detector.setInputSize((width, height))
         _, faces = detector.detect(img)
 
-        if faces is not None and len(faces) > 0:
+        if faces is not None and len(faces) > 0:  # type: ignore
             fx, fy, fw, fh = map(int, faces[0][:4])
             padding = int(fh * 0.6)
 
@@ -120,7 +120,7 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
             # Interpolation set to LANCZOS4 which is better for upscaling if needed
             final_img = cv2.resize(
-                cropped_img, TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
+                cropped_img, DEFAULT_TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
             )
 
             # Use our new Pillow save function
@@ -139,7 +139,7 @@ def main(target_dir: str, output_dir: str | None, err_output: str) -> int:
 
             fallback_img = img[cy1 : cy1 + min_dim, cx1 : cx1 + min_dim]
             final_img = cv2.resize(
-                fallback_img, TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
+                fallback_img, DEFAULT_TARGET_SIZE, interpolation=cv2.INTER_LANCZOS4
             )
 
             # Use our new Pillow save function

@@ -1,0 +1,3 @@
+[TYPECHECK]
+generated-members=cv2.*
+; extension-pkg-allow-list=cv2
