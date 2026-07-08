@@ -46,14 +46,32 @@ def get_face_detector(
 
 
 def normalize_target_brightness(
-    cv2_image: cv2.typing.MatLike, target_percentage: int
+    cv2_image: cv2.typing.MatLike,
+    target_percentage: int,
+    apply_soft_stretch: bool = False,
+    black_point: float = 25.0,
+    white_point: float = 230.0,
 ) -> cv2.typing.MatLike:
     """
     Uses Gamma Correction to non-linearly adjust the midtones of the image
     so the overall average brightness matches the target percentage.
-    This mimics the 'Midtone' slider in Photoshop's Levels adjustment.
+    If enabled, applies a soft contrast stretch to standardize the dynamic range.
     """
-    # 1. Calculate current average brightness using standard grayscale
+
+    if apply_soft_stretch:
+        # 1. Detect dynamic range
+        gray = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2GRAY)
+        p1, p99 = np.percentile(gray, (1, 99))
+        dynamic_range = p99 - p1
+
+        # Soft stretch: map to user-defined points instead of 0-255 to keep it looking natural
+        # Safety check added to prevent division by zero on solid color images
+        if dynamic_range > 0:
+            alpha = (white_point - black_point) / dynamic_range
+            beta = black_point - (p1 * alpha)
+            cv2_image = cv2.convertScaleAbs(cv2_image, alpha=alpha, beta=beta)
+
+    # Recalculate grayscale mean for the Gamma step
     gray = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2GRAY)
     current_mean = cv2.mean(gray)[0]
 
@@ -72,9 +90,13 @@ def normalize_target_brightness(
     lut = np.array([((i / 255.0) ** gamma) * 255 for i in np.arange(0, 256)]).astype(
         "uint8"
     )
+    final_bgr = cv2.LUT(cv2_image, lut)
 
-    # 5. Apply the non-linear curve directly to the BGR channels (exactly how Photoshop Levels works)
-    return cv2.LUT(cv2_image, lut)
+    # 5. Denoise (Fixes grain if we stretched deep shadows heavily)
+    if gamma < 0.8:
+        final_bgr = cv2.bilateralFilter(final_bgr, d=5, sigmaColor=25, sigmaSpace=25)
+
+    return final_bgr
 
 
 def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
@@ -94,26 +116,59 @@ def save_with_dpi(cv2_image: cv2.typing.MatLike, output_path: Path):
 
 
 def main(
-    target_dir: str,
-    output_dir: str | None,
+    target: str,
+    output: str | None,
     err_output: str,
     size: int,
     padding_ratio: float,
     exclude: str | None,
     normalize: int | None,
+    soft_stretch: bool,
+    black: float,
+    white: float,
 ) -> int:
-    input_path = Path(target_dir)
+    input_path = Path(target)
     target_size = (size, size)
 
-    if not input_path.is_dir():
-        print(f"Error: Directory '{target_dir}' does not exist or is not a directory.")
+    if not input_path.exists():
+        print(f"Error: Path '{target}' does not exist.")
         return 1
 
-    output_path = (
-        Path(output_dir) if output_dir is not None else Path(input_path) / "output"
-    )
-    output_path.mkdir(exist_ok=True)
-    print(f"Output directory set to: {output_path}")
+    single_out_file = None
+
+    if input_path.is_file():
+        if input_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            print(f"Error: File '{target}' is not a supported image format.")
+            return 1
+        files = [input_path]
+        base_dir = input_path.parent
+
+        if output:
+            out_path = Path(output)
+            # If it's an existing directory, or has no file extension, treat as a folder
+            if out_path.is_dir() or not out_path.suffix:
+                output_dir_path = out_path
+                single_out_file = output_dir_path / input_path.name
+            # Otherwise, treat it as the exact output filename (e.g. "student.jpg")
+            else:
+                output_dir_path = out_path.parent
+                single_out_file = out_path
+        else:
+            output_dir_path = base_dir / "output"
+            single_out_file = output_dir_path / input_path.name
+
+        output_dir_path.mkdir(parents=True, exist_ok=True)
+    else:
+        files = [
+            f
+            for f in input_path.iterdir()
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        base_dir = input_path
+        output_dir_path = Path(output) if output is not None else base_dir / "output"
+        output_dir_path.mkdir(parents=True, exist_ok=True)
+
+    print(f"Output directory set to: {output_dir_path}")
     print(f"Target Resolution: {size}x{size}px | Padding Ratio: {padding_ratio}x")
 
     if normalize is not None:
@@ -121,14 +176,10 @@ def main(
         print(
             f"[*] Normalization ENABLED: All images will be Gamma-corrected to {normalize}% brightness."
         )
+        if soft_stretch:
+            print(f"[*] Soft Stretch ENABLED: Mapping flat images to {black}-{white}.")
 
     detector = get_face_detector(input_size=target_size)
-
-    files = [
-        f
-        for f in input_path.iterdir()
-        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
-    ]
 
     # Filter out files containing the exclusion pattern if provided
     if exclude:
@@ -148,7 +199,9 @@ def main(
     failed_detections: list[str] = []
 
     for img_file in tqdm(files, desc="Processing images"):
-        out_file = output_path / img_file.name
+        out_file = (
+            single_out_file if single_out_file else (output_dir_path / img_file.name)
+        )
 
         img = cv2.imread(str(img_file))
         if img is None:
@@ -187,7 +240,9 @@ def main(
 
             # --- Target Brightness Normalization ---
             if normalize is not None:
-                final_img = normalize_target_brightness(final_img, normalize)
+                final_img = normalize_target_brightness(
+                    final_img, normalize, soft_stretch, black, white
+                )
 
             # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
@@ -210,7 +265,9 @@ def main(
 
             # --- Target Brightness Normalization ---
             if normalize is not None:
-                final_img = normalize_target_brightness(final_img, normalize)
+                final_img = normalize_target_brightness(
+                    final_img, normalize, soft_stretch, black, white
+                )
 
             # Use our new Pillow save function with dynamic size
             save_with_dpi(final_img, out_file)
@@ -218,7 +275,7 @@ def main(
     print("\nProcessing complete!")
 
     if failed_detections:
-        err_file_path = input_path / err_output
+        err_file_path = output_dir_path / err_output
         with open(err_file_path, "w", encoding="utf-8") as f:
             for name in failed_detections:
                 f.write(f"{name}\n")
@@ -234,14 +291,15 @@ if __name__ == "__main__":
         description="Crop student pictures into 1:1 IDs with strict DPI metadata."
     )
     parser.add_argument(
-        "target_dir",
+        "target",
         type=str,
-        help="Target directory containing the raw student images.",
+        help="Target directory or specific image file.",
     )
     parser.add_argument(
-        "--output-dir",
+        "-o",
+        "--output",
         type=str,
-        help="Output directory where cropped images will be saved.",
+        help="Output directory (or specific filename if input is a single file) where cropped images will be saved.",
         default=None,
     )
     parser.add_argument(
@@ -269,6 +327,23 @@ if __name__ == "__main__":
         help="Target average brightness percentage (1-99). Uses Gamma correction (Levels adjustment).",
     )
     parser.add_argument(
+        "--soft-stretch",
+        action="store_true",
+        help="Enable soft contrast stretching for flat images before normalization.",
+    )
+    parser.add_argument(
+        "--black",
+        type=float,
+        default=25.0,
+        help="Target pure black value for soft stretch (0-255). Default: 25.0",
+    )
+    parser.add_argument(
+        "--white",
+        type=float,
+        default=230.0,
+        help="Target pure white value for soft stretch (0-255). Default: 230.0",
+    )
+    parser.add_argument(
         "--err-output",
         type=str,
         default="no_face_detected.txt",
@@ -278,12 +353,15 @@ if __name__ == "__main__":
 
     sys.exit(
         main(
-            args.target_dir,
-            args.output_dir,
+            args.target,
+            args.output,
             args.err_output,
             args.size,
             args.padding,
             args.exclude,
             args.normalize,
+            args.soft_stretch,
+            args.black,
+            args.white,
         )
     )
